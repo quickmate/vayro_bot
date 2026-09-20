@@ -1,0 +1,4 @@
+python-telegram-bot<23,>=22
+python-dotenv
+httpx
+groq
