@@ -1,4 +1,5 @@
-python-telegram-bot>=22,<23
+python-telegram-bot<23,>=22
 google-genai
 python-dotenv
 httpx
+groq
