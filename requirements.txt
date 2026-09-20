@@ -1,5 +1,0 @@
-python-telegram-bot<23,>=22
-google-genai
-python-dotenv
-httpx
-groq
