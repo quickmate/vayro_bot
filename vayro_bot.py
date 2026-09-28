@@ -365,9 +365,8 @@ def budget_fallback_text(product, style="", colour=""):
 
     sizes = available_size_rows(product)
     size_text = ", ".join(size for size, _ in sizes) or "Available"
-    style_text = " ".join(
-        part.strip() for part in (style, colour) if part and part.strip()
-    ).strip() or "Classic VAYRO Style"
+    # Show only the customer's Style answer; never append the Colour.
+    style_text = str(style or "").strip() or "Classic VAYRO Style"
     return (
         f'Product: {product["name"]}\n'
         f'Price: ₹{product["price"]}\n'
@@ -621,7 +620,7 @@ Product: [exact catalog product name]
 Price: [exact catalog price]
 Colour: [exact catalog colour or Not specified]
 Sizes: [only currently available sizes]
-Style: [2-4 word style match]
+Style: [the customer's Style answer only; do not add the Colour]
 
 Maximum 6 lines. No emojis.
 Use ALL CRITERIA only when Style + Colour + Budget are all reasonably matched.
@@ -653,6 +652,14 @@ Never Return "No Matching VAYRO Sneaker Found."
                     count=1,
                     flags=re.IGNORECASE,
                 ).strip()
+
+                # Keep Style exactly as the customer's Style answer.
+                result = re.sub(
+                    r"(?im)^Style\s*:\s*.*$",
+                    f"Style: {style.strip() or 'Classic VAYRO Style'}",
+                    result,
+                    count=1,
+                )
 
         reset_session(user_id)
         await loading_message.edit_text(
