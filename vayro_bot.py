@@ -306,6 +306,8 @@ def format_bot_text(text: str) -> str:
                 return word[:i] + char.upper() + word[i + 1:]
         return word
 
+    text = str(text).replace(r"\N", "\n")
+
     return re.sub(
         r"[^\W\d_]+(?:['’/-][^\W\d_]+)*",
         cap_word,
@@ -357,17 +359,21 @@ def select_budget_fallback(products, budget):
     )
 
 
-def budget_fallback_text(product):
+def budget_fallback_text(product, style="", colour=""):
     if not product:
         return "No In-Stock VAYRO Product Is Currently Available."
 
     sizes = available_size_rows(product)
     size_text = ", ".join(size for size, _ in sizes) or "Available"
+    style_text = " ".join(
+        part.strip() for part in (style, colour) if part and part.strip()
+    ).strip() or "Classic VAYRO Style"
     return (
-        f'Product: {product["name"]}\\n'
-        f'Price: ₹{product["price"]}\\n'
-        f'Colour: {product["colour"] or "Not specified"}\\n'
-        f'Sizes: {size_text}'
+        f'Product: {product["name"]}\n'
+        f'Price: ₹{product["price"]}\n'
+        f'Colour: {product["colour"] or "Not specified"}\n'
+        f'Sizes: {size_text}\n'
+        f'Style: {style_text}'
     )
 
 
@@ -411,7 +417,7 @@ def main_menu():
     ]
 
     if WHATSAPP_SUPPORT_NUMBER:
-        whatsapp_number = re.sub(r"\\D", "", WHATSAPP_SUPPORT_NUMBER)
+        whatsapp_number = re.sub(r"\D", "", WHATSAPP_SUPPORT_NUMBER)
         if whatsapp_number:
             keyboard.append([
                 InlineKeyboardButton(
@@ -634,7 +640,9 @@ Never Return "No Matching VAYRO Sneaker Found."
                 or "MATCH STATUS:BUDGET ONLY" in result_upper
             ):
                 result = budget_fallback_text(
-                    select_budget_fallback(products, budget)
+                    select_budget_fallback(products, budget),
+                    style,
+                    colour,
                 )
             else:
                 # Hide the internal matching status from the customer.
