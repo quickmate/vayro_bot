@@ -39,6 +39,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = (os.getenv("SUPABASE_SECRET_KEY", "").strip() or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip())
+WHATSAPP_SUPPORT_NUMBER = os.getenv("WHATSAPP_SUPPORT_NUMBER", "").strip()
 
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError(
@@ -215,7 +216,7 @@ async def poll_restock_alerts(application):
                     try:
                         await application.bot.send_message(
                             chat_id=int(alert["telegram_chat_id"]),
-                            text=(
+                            text=format_bot_text(
                                 "Restock Alert\n\n"
                                 f'Product: {product["name"]}\n'
                                 "Status: In Stock\n"
@@ -290,6 +291,87 @@ def get_session(user_id: int):
 
 
 # ============================================================
+# OUTPUT / RECOMMENDATION HELPERS
+# ============================================================
+
+def format_bot_text(text: str) -> str:
+    """Capitalize the first letter of every visible word."""
+    if not text:
+        return text
+
+    def cap_word(match):
+        word = match.group(0)
+        for i, char in enumerate(word):
+            if char.isalpha():
+                return word[:i] + char.upper() + word[i + 1:]
+        return word
+
+    return re.sub(
+        r"[^\W\d_]+(?:['’/-][^\W\d_]+)*",
+        cap_word,
+        str(text),
+        flags=re.UNICODE,
+    )
+
+
+def parse_budget(value):
+    if value is None:
+        return None
+    match = re.search(r"\d+(?:[.,]\d+)?", str(value).replace(",", ""))
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def select_budget_fallback(products, budget):
+    """Return the in-stock product closest to the customer's budget."""
+    available = []
+    for raw in products:
+        product = normalize_product(raw)
+        if not product["name"] or product["stock"] <= 0:
+            continue
+        try:
+            product["_price_number"] = float(
+                str(product["price"]).replace(",", "").strip()
+            )
+        except (TypeError, ValueError):
+            continue
+        available.append(product)
+
+    if not available:
+        return None
+
+    target = parse_budget(budget)
+    if target is None:
+        return min(available, key=lambda p: p["_price_number"])
+
+    return min(
+        available,
+        key=lambda p: (
+            abs(p["_price_number"] - target),
+            p["_price_number"],
+        ),
+    )
+
+
+def budget_fallback_text(product):
+    if not product:
+        return "No In-Stock VAYRO Product Is Currently Available."
+
+    sizes = available_size_rows(product)
+    size_text = ", ".join(size for size, _ in sizes) or "Available"
+    return (
+        f'Product: {product["name"]}\\n'
+        f'Price: ₹{product["price"]}\\n'
+        f'Colour: {product["colour"] or "Not specified"}\\n'
+        f'Sizes: {size_text}'
+    )
+
+
+# ============================================================
 # MAIN MENU
 # ============================================================
 
@@ -328,6 +410,16 @@ def main_menu():
         ],
     ]
 
+    if WHATSAPP_SUPPORT_NUMBER:
+        whatsapp_number = re.sub(r"\\D", "", WHATSAPP_SUPPORT_NUMBER)
+        if whatsapp_number:
+            keyboard.append([
+                InlineKeyboardButton(
+                    "WhatsApp Support",
+                    url=f"https://wa.me/{whatsapp_number}",
+                )
+            ])
+
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -349,7 +441,7 @@ def back_menu():
 # WELCOME MESSAGE
 # ============================================================
 
-WELCOME_TEXT = (
+WELCOME_TEXT = format_bot_text(
     "Welcome to VAYRO.\n\n"
     "How can I help you today?\n\n"
     "Choose an option from below."
@@ -382,7 +474,7 @@ async def start(
 
 async def ask_groq(prompt: str) -> str:
     if groq_client is None:
-        return (
+        return format_bot_text(
             "The VAYRO AI assistant is temporarily unavailable. "
             "Please try again shortly."
         )
@@ -404,17 +496,17 @@ async def ask_groq(prompt: str) -> str:
         ).strip()
 
         if output_text:
-            return output_text
+            return format_bot_text(output_text)
 
         logger.error("Groq returned an empty response.")
-        return (
+        return format_bot_text(
             "I could not generate a response right now. "
             "Please try again."
         )
 
     except Exception as e:
         logger.exception("Groq text request failed: %s", e)
-        return (
+        return format_bot_text(
             "The VAYRO AI assistant is temporarily unavailable. "
             "Please try again shortly."
         )
@@ -441,16 +533,18 @@ async def start_sneaker_finder(
 
     # Do NOT edit/delete the old message.
     await query.message.reply_text(
-        "Find My Sneaker\n\n"
-        "Let's find a sneaker that matches your style.\n\n"
-        "What kind of sneaker are you looking for?\n\n"
-        "For example:\n"
-        "Daily wear\n"
-        "Streetwear\n"
-        "Minimal\n"
-        "Sporty\n"
-        "Casual\n"
-        "Bold",
+        format_bot_text(
+            "Find My Sneaker\n\n"
+            "Let's find a sneaker that matches your style.\n\n"
+            "What kind of sneaker are you looking for?\n\n"
+            "For example:\n"
+            "Daily wear\n"
+            "Streetwear\n"
+            "Minimal\n"
+            "Sporty\n"
+            "Casual\n"
+            "Bold"
+        ),
         reply_markup=back_menu(),
     )
 
@@ -470,7 +564,7 @@ async def handle_sneaker_finder(
         session["step"] = "colour"
 
         await update.message.reply_text(
-            "What colour or colour combination do you prefer?"
+            format_bot_text("What colour or colour combination do you prefer?")
         )
 
         return
@@ -481,7 +575,7 @@ async def handle_sneaker_finder(
         session["step"] = "budget"
 
         await update.message.reply_text(
-            "What is your approximate budget in INR?"
+            format_bot_text("What is your approximate budget in INR?")
         )
 
         return
@@ -494,7 +588,7 @@ async def handle_sneaker_finder(
         budget = session["data"].get("budget", "")
 
         loading_message = await update.message.reply_text(
-            "Find My Sneaker\n\nPlease wait a moment..."
+            format_bot_text("Find My Sneaker\n\nPlease wait a moment...")
         )
 
         products = await fetch_products()
@@ -516,21 +610,45 @@ Live catalog:
 {catalog}
 
 Return ONLY:
+Match Status: [ALL CRITERIA or BUDGET ONLY]
 Product: [exact catalog product name]
 Price: [exact catalog price]
 Colour: [exact catalog colour or Not specified]
 Sizes: [only currently available sizes]
 Style: [2-4 word style match]
 
-Maximum 5 lines. No emojis.
-If nothing reasonably matches the customer's budget/style/colour, return exactly:
-No matching VAYRO sneaker found.
+Maximum 6 lines. No emojis.
+Use ALL CRITERIA only when Style + Colour + Budget are all reasonably matched.
+If all three cannot be matched by an in-stock product, use BUDGET ONLY.
+For BUDGET ONLY, the Python fallback will select the closest in-stock price.
+Never Return "No Matching VAYRO Sneaker Found."
 """
             result = await ask_groq(prompt)
 
+            result_upper = result.upper()
+            if (
+                not result
+                or "NO MATCHING VAYRO SNEAKER FOUND" in result_upper
+                or "NO MATCHING" in result_upper
+                or "MATCH STATUS: BUDGET ONLY" in result_upper
+                or "MATCH STATUS:BUDGET ONLY" in result_upper
+            ):
+                result = budget_fallback_text(
+                    select_budget_fallback(products, budget)
+                )
+            else:
+                # Hide the internal matching status from the customer.
+                result = re.sub(
+                    r"^\\s*Match Status\\s*:\\s*(?:ALL CRITERIA|BUDGET ONLY)\\s*\\n?",
+                    "",
+                    result,
+                    count=1,
+                    flags=re.IGNORECASE,
+                ).strip()
+
         reset_session(user_id)
         await loading_message.edit_text(
-            "Find My Sneaker\n\n" + result,
+            format_bot_text("Find My Sneaker\n\n" + result),
             reply_markup=main_menu(),
         )
 
@@ -555,10 +673,12 @@ async def start_size_finder(
     session["step"] = "length"
 
     await query.message.reply_text(
-        "Find My Size\n\n"
-        "Let's find the right size direction for you.\n\n"
-        "Tell me your foot length in centimetres.\n\n"
-        "Example: 26.5",
+        format_bot_text(
+            "Find My Size\n\n"
+            "Let's find the right size direction for you.\n\n"
+            "Tell me your foot length in centimetres.\n\n"
+            "Example: 26.5"
+        ),
         reply_markup=back_menu(),
     )
 
@@ -578,19 +698,21 @@ async def handle_size_finder(
     try:
         foot_length = float(message.replace(",", ".").strip().lower().replace("cm", "").strip())
     except ValueError:
-        await update.message.reply_text("Please enter your foot length in cm. Example: 26.5")
+        await update.message.reply_text(format_bot_text("Please enter your foot length in cm. Example: 26.5"))
         return
 
     if foot_length <= 0 or foot_length > 40:
-        await update.message.reply_text("Please enter a valid foot length in cm. Example: 26.5")
+        await update.message.reply_text(format_bot_text("Please enter a valid foot length in cm. Example: 26.5"))
         return
 
     size = recommend_vayro_size(foot_length)
     reset_session(user_id)
     await update.message.reply_text(
-        "Find My Size\n\n"
-        f"Foot Length: {foot_length:g} cm\n"
-        f"Recommended Size: {size or 'Check size guide'}",
+        format_bot_text(
+            "Find My Size\n\n"
+            f"Foot Length: {foot_length:g} cm\n"
+            f"Recommended Size: {size or 'Check size guide'}"
+        ),
         reply_markup=main_menu(),
     )
 
@@ -615,11 +737,13 @@ async def start_outfit(
     session["step"] = "photo"
 
     await query.message.reply_text(
-        "Match My Outfit\n\n"
-        "Send me a clear photo of your outfit.\n\n"
-        "I'll analyze the colours and overall style "
-        "and suggest the type of VAYRO sneaker that "
-        "could work with it.",
+        format_bot_text(
+            "Match My Outfit\n\n"
+            "Send me a clear photo of your outfit.\n\n"
+            "I'll analyze the colours and overall style "
+            "and suggest the type of VAYRO sneaker that "
+            "could work with it."
+        ),
         reply_markup=back_menu(),
     )
 
@@ -633,7 +757,7 @@ async def handle_outfit_photo(
 
     if session.get("feature") != "outfit":
         await update.message.reply_text(
-            "Please choose Match My Outfit from the VAYRO menu.",
+            format_bot_text("Please choose Match My Outfit from the VAYRO menu."),
             reply_markup=main_menu(),
         )
         return
@@ -763,7 +887,7 @@ LIVE VAYRO CATALOG:
 
         # Send the loading message only after the catalog/prompt is ready.
         loading_message = await update.message.reply_text(
-            "Match My Outfit\n\nPlease wait a moment..."
+            format_bot_text("Match My Outfit\n\nPlease wait a moment...")
         )
 
         if groq_client is None:
@@ -803,9 +927,11 @@ LIVE VAYRO CATALOG:
             stream=False,
         )
 
-        result = (
-            response.choices[0].message.content or ""
-        ).strip()
+        result = format_bot_text(
+            (
+                response.choices[0].message.content or ""
+            ).strip()
+        )
 
         if not result:
             raise RuntimeError(
@@ -826,7 +952,7 @@ LIVE VAYRO CATALOG:
             e,
         )
 
-        error_text = (
+        error_text = format_bot_text(
             "I could not process that photo. "
             "Please try sending it again."
         )
@@ -872,10 +998,12 @@ async def start_alert(
     session["step"] = "product"
 
     await query.message.reply_text(
-        "Restock Alert\n\n"
-        "Tell me the sneaker you want to receive "
-        "a restock notification for.\n\n"
-        "Enter the sneaker name or product name.",
+        format_bot_text(
+            "Restock Alert\n\n"
+            "Tell me the sneaker you want to receive "
+            "a restock notification for.\n\n"
+            "Enter the sneaker name or product name."
+        ),
         reply_markup=back_menu(),
     )
 
@@ -895,7 +1023,7 @@ async def handle_alert(
     products = await fetch_products()
     if not products:
         reset_session(user_id)
-        await update.message.reply_text("Restock Alert\n\nProduct data is currently unavailable.", reply_markup=main_menu())
+        await update.message.reply_text(format_bot_text("Restock Alert\n\nProduct data is currently unavailable."), reply_markup=main_menu())
         return
 
     normalized = [normalize_product(p) for p in products]
@@ -906,7 +1034,7 @@ async def handle_alert(
     if exact is None:
         reset_session(user_id)
         await update.message.reply_text(
-            "Restock Alert\n\nProduct not found. Please enter the VAYRO product name.",
+            format_bot_text("Restock Alert\n\nProduct not found. Please enter the VAYRO product name."),
             reply_markup=main_menu(),
         )
         return
@@ -916,10 +1044,12 @@ async def handle_alert(
         size_text = ", ".join(size for size, _ in sizes) or "Available"
         reset_session(user_id)
         await update.message.reply_text(
-            "Restock Alert\n\n"
-            f'Product: {exact["name"]}\n'
-            "Status: In Stock\n"
-            f"Sizes: {size_text}",
+            format_bot_text(
+                "Restock Alert\n\n"
+                f'Product: {exact["name"]}\n'
+                "Status: In Stock\n"
+                f"Sizes: {size_text}"
+            ),
             reply_markup=main_menu(),
         )
         return
@@ -940,7 +1070,7 @@ async def handle_alert(
             "Status: Out of Stock\n"
             "We could not save the alert. Please try again."
         )
-    await update.message.reply_text(text, reply_markup=main_menu())
+    await update.message.reply_text(format_bot_text(text), reply_markup=main_menu())
 
 
 # ============================================================
@@ -963,15 +1093,17 @@ async def start_gift(
     session["step"] = "recipient"
 
     await query.message.reply_text(
-        "Gift Finder\n\n"
-        "Let's find a sneaker gift that fits their style.\n\n"
-        "Who are you buying for?\n\n"
-        "For example:\n"
-        "Brother\n"
-        "Sister\n"
-        "Friend\n"
-        "Partner\n"
-        "Teenager",
+        format_bot_text(
+            "Gift Finder\n\n"
+            "Let's find a sneaker gift that fits their style.\n\n"
+            "Who are you buying for?\n\n"
+            "For example:\n"
+            "Brother\n"
+            "Sister\n"
+            "Friend\n"
+            "Partner\n"
+            "Teenager"
+        ),
         reply_markup=back_menu(),
     )
 
@@ -991,7 +1123,7 @@ async def handle_gift_finder(
         session["step"] = "budget"
 
         await update.message.reply_text(
-            "What is your gift budget in INR?"
+            format_bot_text("What is your gift budget in INR?")
         )
 
         return
@@ -1002,12 +1134,14 @@ async def handle_gift_finder(
         session["step"] = "style"
 
         await update.message.reply_text(
-            "What kind of style do they usually like?\n\n"
-            "Minimal\n"
-            "Streetwear\n"
-            "Sporty\n"
-            "Classic\n"
-            "Bold"
+            format_bot_text(
+                "What kind of style do they usually like?\n\n"
+                "Minimal\n"
+                "Streetwear\n"
+                "Sporty\n"
+                "Classic\n"
+                "Bold"
+            )
         )
 
         return
@@ -1020,7 +1154,7 @@ async def handle_gift_finder(
         style = session["data"].get("style", "")
 
         loading_message = await update.message.reply_text(
-            "Gift Finder\n\nPlease wait a moment..."
+            format_bot_text("Gift Finder\n\nPlease wait a moment...")
         )
 
         products = await fetch_products()
@@ -1047,14 +1181,30 @@ Colour: [exact catalog colour or Not specified]
 Best For: [one short reason]
 
 Maximum 4 lines. No emojis.
-If nothing reasonably matches, return exactly:
-No matching VAYRO gift found.
+If Nothing Matches All Criteria, Return The Closest In-Stock Product By Budget.
+Never Return "No Matching VAYRO Gift Found."
 """
             result = await ask_groq(prompt)
 
+            if (
+                not result
+                or "NO MATCHING VAYRO GIFT FOUND" in result.upper()
+                or "NO MATCHING" in result.upper()
+            ):
+                fallback = select_budget_fallback(products, budget)
+                if fallback:
+                    result = (
+                        f'Product: {fallback["name"]}\n'
+                        f'Price: ₹{fallback["price"]}\n'
+                        f'Colour: {fallback["colour"] or "Not specified"}\n'
+                        "Best For: Closest Available Budget Match"
+                    )
+                else:
+                    result = "No In-Stock VAYRO Product Is Currently Available."
+
         reset_session(user_id)
         await loading_message.edit_text(
-            "Gift Finder\n\n" + result,
+            format_bot_text("Gift Finder\n\n" + result),
             reply_markup=main_menu(),
         )
 
@@ -1079,13 +1229,15 @@ async def start_care(
     session["step"] = "question"
 
     await query.message.reply_text(
-        "Sneaker Care\n\n"
-        "How can I help you care for your sneakers?\n\n"
-        "For example:\n"
-        "How should I clean my sneakers?\n"
-        "How do I remove a stain?\n"
-        "How should I store them?\n"
-        "How do I keep white sneakers clean?",
+        format_bot_text(
+            "Sneaker Care\n\n"
+            "How can I help you care for your sneakers?\n\n"
+            "For example:\n"
+            "How should I clean my sneakers?\n"
+            "How do I remove a stain?\n"
+            "How should I store them?\n"
+            "How do I keep white sneakers clean?"
+        ),
         reply_markup=back_menu(),
     )
 
@@ -1118,7 +1270,7 @@ Do not use emojis.
 """
 
     loading_message = await update.message.reply_text(
-        "Sneaker Care\n\nPlease wait a moment..."
+        format_bot_text("Sneaker Care\n\nPlease wait a moment...")
     )
 
     result = await ask_groq(prompt)
@@ -1126,7 +1278,7 @@ Do not use emojis.
     reset_session(user_id)
 
     await loading_message.edit_text(
-        "Sneaker Care\n\n" + result,
+        format_bot_text("Sneaker Care\n\n" + result),
         reply_markup=main_menu(),
     )
 
@@ -1294,7 +1446,7 @@ async def text_handler(
     if feature == "outfit":
 
         await update.message.reply_text(
-            "Please send an outfit photo.",
+            format_bot_text("Please send an outfit photo."),
             reply_markup=back_menu(),
         )
 
@@ -1322,7 +1474,7 @@ async def photo_handler(
         return
 
     await update.message.reply_text(
-        "Please choose Match My Outfit first.",
+        format_bot_text("Please choose Match My Outfit first."),
         reply_markup=main_menu(),
     )
 
